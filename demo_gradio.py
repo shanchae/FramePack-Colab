@@ -36,7 +36,7 @@ parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
 parser.add_argument("--port", type=int, required=False)
 parser.add_argument("--inbrowser", action='store_true')
-args = parser.parse_args()
+args = parser.parse_args([])
 
 # for win desktop probably use --server 127.0.0.1 --inbrowser
 # For linux server probably use --server 127.0.0.1 or do not use any cmd flags
@@ -326,6 +326,7 @@ def process(
     assert input_image is not None, 'No input image!'
 
     if int(seed) == -1:
+        print('Generating 3 random videos with random seeds.')
         num_videos = 3
         videos = []
         for _ in range(num_videos):
@@ -437,4 +438,5 @@ block.launch(
     server_port=args.port,
     share=args.share,
     inbrowser=args.inbrowser,
+    inline=True,
 )
