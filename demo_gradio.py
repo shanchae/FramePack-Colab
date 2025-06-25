@@ -12,6 +12,9 @@ import safetensors.torch as sf
 import numpy as np
 import argparse
 import math
+import random
+
+FPS = 24
 
 from PIL import Image
 from diffusers import AutoencoderKLHunyuanVideo
@@ -100,7 +103,7 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, fps):
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -234,7 +237,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 current_step = d['i'] + 1
                 percentage = int(100.0 * current_step / steps)
                 hint = f'Sampling {current_step}/{steps}'
-                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30) :.2f} seconds (FPS-30). The video is being extended now ...'
+                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30) :.2f} seconds (FPS-24). The video is being extended now ...'
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
                 return
 
@@ -295,7 +298,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
 
-            save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=mp4_crf)
+            save_bcthw_as_mp4(history_pixels, output_filename, fps=fps, crf=mp4_crf)
 
             print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
 
@@ -315,32 +318,55 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     return
 
 
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def process(
+    input_image, prompt, n_prompt, seed, total_second_length, latent_window_size,
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf
+):
     global stream
     assert input_image is not None, 'No input image!'
 
-    yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
+    output_filenames = []
 
-    stream = AsyncStream()
-
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf)
-
-    output_filename = None
-
-    while True:
-        flag, data = stream.output_queue.next()
-
-        if flag == 'file':
-            output_filename = data
-            yield output_filename, gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
-
-        if flag == 'progress':
-            preview, desc, html = data
-            yield gr.update(), gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
-
-        if flag == 'end':
-            yield output_filename, gr.update(visible=False), gr.update(), '', gr.update(interactive=True), gr.update(interactive=False)
-            break
+    # If seed == -1, generate 3 videos with random seeds and FPS = 24
+    if int(seed) == -1:
+        num_videos = 3
+        for _ in range(num_videos):
+            this_seed = random.randint(0, 2**32 - 1)
+            stream = AsyncStream()
+            async_run(
+                worker, input_image, prompt, n_prompt, this_seed, total_second_length,
+                latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, FPS
+            )
+            output_filename = None
+            while True:
+                flag, data = stream.output_queue.next()
+                if flag == 'file':
+                    output_filename = data
+                if flag == 'progress':
+                    pass  # Optionally, handle progress here
+                if flag == 'end':
+                    break
+            output_filenames.append(output_filename)
+        # Yield or return all output_filenames (as videos)
+        return output_filenames, None, None, '', gr.update(interactive=True), gr.update(interactive=False)
+    else:
+        # Single video, use provided seed and default FPS
+        this_seed = int(seed)
+        stream = AsyncStream()
+        async_run(
+            worker, input_image, prompt, n_prompt, this_seed, total_second_length,
+            latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, FPS
+        )
+        output_filename = None
+        while True:
+            flag, data = stream.output_queue.next()
+            if flag == 'file':
+                output_filename = data
+            if flag == 'progress':
+                pass  # Optionally, handle progress here
+            if flag == 'end':
+                break
+        return output_filename, None, None, '', gr.update(interactive=True), gr.update(interactive=False)
 
 
 def end_process():
