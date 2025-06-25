@@ -237,7 +237,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 current_step = d['i'] + 1
                 percentage = int(100.0 * current_step / steps)
                 hint = f'Sampling {current_step}/{steps}'
-                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30) :.2f} seconds (FPS-24). The video is being extended now ...'
+                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / fps) :.2f} seconds (FPS-{fps}). The video is being extended now ...'
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
                 return
 
@@ -325,11 +325,9 @@ def process(
     global stream
     assert input_image is not None, 'No input image!'
 
-    output_filenames = []
-
-    # If seed == -1, generate 3 videos with random seeds and FPS = 24
     if int(seed) == -1:
         num_videos = 3
+        videos = []
         for _ in range(num_videos):
             this_seed = random.randint(0, 2**32 - 1)
             stream = AsyncStream()
@@ -343,14 +341,16 @@ def process(
                 if flag == 'file':
                     output_filename = data
                 if flag == 'progress':
-                    pass  # Optionally, handle progress here
+                    pass  # Optionally handle progress
                 if flag == 'end':
                     break
-            output_filenames.append(output_filename)
-        # Yield or return all output_filenames (as videos)
-        return output_filenames, None, None, '', gr.update(interactive=True), gr.update(interactive=False)
+            videos.append(output_filename)
+        # Pad with None if needed
+        while len(videos) < 3:
+            videos.append(None)
+        # Return all videos, with extra outputs for Gradio
+        return videos[0], videos[1], videos[2], None, None, '', gr.update(interactive=True), gr.update(interactive=False)
     else:
-        # Single video, use provided seed and default FPS
         this_seed = int(seed)
         stream = AsyncStream()
         async_run(
@@ -363,12 +363,11 @@ def process(
             if flag == 'file':
                 output_filename = data
             if flag == 'progress':
-                pass  # Optionally, handle progress here
+                pass
             if flag == 'end':
                 break
-        return output_filename, None, None, '', gr.update(interactive=True), gr.update(interactive=False)
-
-
+        return output_filename, None, None, None, None, '', gr.update(interactive=True), gr.update(interactive=False)
+    
 def end_process():
     stream.input_queue.push('end')
 
@@ -415,15 +414,21 @@ with block:
 
         with gr.Column():
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
-            gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling. If the starting action is not in the video, you just need to wait, and it will be generated later.')
+            result_video_1 = gr.Video(label="Finished Frames 1", autoplay=True, show_share_button=False, height=512, loop=True)
+            result_video_2 = gr.Video(label="Finished Frames 2", autoplay=True, show_share_button=False, height=512, loop=True)
+            result_video_3 = gr.Video(label="Finished Frames 3", autoplay=True, show_share_button=False, height=512, loop=True)
+            gr.Markdown('**Enter -1 for seed to generate 3 random videos at 24 FPS.**')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
-    start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
+    start_button.click(
+    fn=process,
+    inputs=ips,
+    outputs=[result_video_1, result_video_2, result_video_3, preview_image, progress_desc, progress_bar, start_button, end_button]
+    )
     end_button.click(fn=end_process)
 
 
