@@ -437,6 +437,5 @@ block.launch(
     server_name=args.server,
     server_port=args.port,
     share=args.share,
-    inbrowser=args.inbrowser,
-    inline=True,
+    inbrowser=args.inbrowser
 )
