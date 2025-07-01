@@ -48,6 +48,7 @@ except:
     flash_attn_varlen_func = None
     flash_attn_func = None
 
+'''
 try:
     # raise NotImplementedError
     from sageattention import sageattn_varlen, sageattn
@@ -56,7 +57,7 @@ except:
     print('Sage Attn is not installed!')
     sageattn_varlen = None
     sageattn = None
-
+'''
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -104,7 +105,7 @@ def apply_rotary_emb_transposed(x, freqs_cis):
     out = out.to(x)
     return out
 
-
+'''
 def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv):
     if cu_seqlens_q is None and cu_seqlens_kv is None and max_seqlen_q is None and max_seqlen_kv is None:
         if sageattn is not None:
@@ -138,6 +139,13 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
     x = x.unflatten(0, (B, L))
 
     return x
+'''
+
+def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv):
+    # Ignore all specialized backends for T4
+    return torch.nn.functional.scaled_dot_product_attention(
+        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+    ).transpose(1, 2)
 
 
 class HunyuanAttnProcessorFlashAttnDouble:
