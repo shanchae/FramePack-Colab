@@ -228,7 +228,14 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
 
-                preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
+                # preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
+
+                if torch.isnan(preview).any() or torch.isinf(preview).any():
+                    print("WARNING: Preview contains NaNs or Infs! Min:", preview.min().item(), "Max:", preview.max().item())
+                    preview = torch.nan_to_num(preview, nan=0.0, posinf=255.0, neginf=0.0)
+
+                preview = (preview * 127.5 + 127.5).clamp(0, 255).detach().cpu().numpy().astype(np.uint8)
+
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
 
                 if stream.input_queue.top() == 'end':
