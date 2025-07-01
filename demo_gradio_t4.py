@@ -239,7 +239,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 current_step = d['i'] + 1
                 percentage = int(100.0 * current_step / steps)
                 hint = f'Sampling {current_step}/{steps}'
-                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30) :.2f} seconds (FPS-30). The video is being extended now ...'
+                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30) :.2f} seconds (FPS-24). The video is being extended now ...'
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
                 return
 
@@ -301,7 +301,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
 
-            save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=mp4_crf)
+            save_bcthw_as_mp4(history_pixels, output_filename, fps=24, crf=mp4_crf)
 
             print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
 

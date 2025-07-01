@@ -142,11 +142,27 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
 '''
 
 def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv):
-    # Ignore all specialized backends for T4
-    return torch.nn.functional.scaled_dot_product_attention(
-        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-    ).transpose(1, 2)
+    # Always use vanilla attention on T4 or when in doubt
+    if cu_seqlens_q is None and cu_seqlens_kv is None and max_seqlen_q is None and max_seqlen_kv is None:
+        # Disable SageAttention and INT8 for T4 compatibility
+        if xformers_attn_func is not None:
+            return xformers_attn_func(q, k, v)
+        # Fallback to PyTorch's vanilla attention
+        return torch.nn.functional.scaled_dot_product_attention(
+            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        ).transpose(1, 2)
 
+    B, L, H, C = q.shape
+    q = q.flatten(0, 1)
+    k = k.flatten(0, 1)
+    v = v.flatten(0, 1)
+    # Only allow flash_attn_varlen_func if you know it's supported (not on T4)
+    if flash_attn_varlen_func is not None:
+        x = flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv)
+    else:
+        raise NotImplementedError('No compatible attention backend installed (xformers/vanilla only on T4).')
+    x = x.unflatten(0, (B, L))
+    return x
 
 class HunyuanAttnProcessorFlashAttnDouble:
     def __call__(self, attn, hidden_states, encoder_hidden_states, attention_mask, image_rotary_emb):
