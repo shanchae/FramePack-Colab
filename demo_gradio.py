@@ -129,6 +129,9 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             for latent_padding in latent_paddings:
                 is_last_section = latent_padding == 0
                 latent_padding_size = latent_padding * latent_window_size
+            for latent_padding in latent_paddings:
+                is_last_section = latent_padding == 0
+                latent_padding_size = latent_padding * latent_window_size
 
                 print(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
 
@@ -136,6 +139,9 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
                 clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
 
+                clean_latents_pre = start_latent.to(history_latents)
+                clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
+                clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
                 clean_latents_pre = start_latent.to(history_latents)
                 clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
@@ -150,11 +156,26 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                         preview = torch.nan_to_num(preview, nan=0.0, posinf=255.0, neginf=0.0)
                     preview = (preview * 127.5 + 127.5).clamp(0, 255).detach().cpu().numpy().astype(np.uint8)
                     preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
+                    # Add nan check and fix normalization for [-1,1] output
+                    if torch.isnan(preview).any() or torch.isinf(preview).any():
+                        print("WARNING: Preview contains NaNs or Infs! Min:", preview.min().item(), "Max:", preview.max().item())
+                        preview = torch.nan_to_num(preview, nan=0.0, posinf=255.0, neginf=0.0)
+                    preview = (preview * 127.5 + 127.5).clamp(0, 255).detach().cpu().numpy().astype(np.uint8)
+                    preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
 
                     if stream.input_queue.top() == 'end':
                         stream.output_queue.push(('end', None))
                         raise KeyboardInterrupt('User ends the task.')
+                    if stream.input_queue.top() == 'end':
+                        stream.output_queue.push(('end', None))
+                        raise KeyboardInterrupt('User ends the task.')
 
+                    current_step = d['i'] + 1
+                    percentage = int(100.0 * current_step / steps)
+                    hint = f'Sampling {current_step}/{steps}'
+                    desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30) :.2f} seconds (FPS-24). The video is being extended now ...'
+                    stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
+                    return
                     current_step = d['i'] + 1
                     percentage = int(100.0 * current_step / steps)
                     hint = f'Sampling {current_step}/{steps}'
@@ -194,7 +215,11 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
                 if is_last_section:
                     generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
+                if is_last_section:
+                    generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
 
+                total_generated_latent_frames += int(generated_latents.shape[2])
+                history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
                 total_generated_latent_frames += int(generated_latents.shape[2])
                 history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
 
@@ -205,7 +230,14 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 else:
                     section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                     overlapped_frames = latent_window_size * 4 - 3
+                if history_pixels is None:
+                    history_pixels = vae_decode(real_history_latents, vae).cpu()
+                else:
+                    section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                    overlapped_frames = latent_window_size * 4 - 3
 
+                    current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
+                    history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                     current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
                     history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
 
@@ -225,6 +257,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
     global stream
     assert input_image is not None, 'No input image!'
 
+    yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
     yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
 
     stream = AsyncStream()
