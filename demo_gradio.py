@@ -102,13 +102,13 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     job_id = generate_timestamp()
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
 
-    # ====== PATCH: multiple seeds if seed == -1 ======
     # If user entered -1 as seed, generate 3 random seeds, else just use the user seed.
     if int(seed) == -1:
         seeds = [random.randint(0, 2**32 - 1) for _ in range(3)]
     else:
         seeds = [int(seed)]
-    # ====== END PATCH =======
+
+    output_filenames = []
 
     for idx, run_seed in enumerate(seeds):
         try:
@@ -275,11 +275,11 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 if not high_vram:
                     unload_complete_models()
 
-                # PATCH: Save each output filename with seed in the filename
                 output_filename = os.path.join(outputs_folder, f'{job_id}_seed{run_seed}_{total_generated_latent_frames}.mp4')
                 save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=mp4_crf)
                 print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
                 stream.output_queue.push(('file', output_filename))
+                output_filenames.append(output_filename)
 
                 if is_last_section:
                     break
@@ -289,35 +289,36 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 unload_complete_models(
                     text_encoder, text_encoder_2, image_encoder, vae, transformer
                 )
-    stream.output_queue.push(('end', None))
+    stream.output_queue.push(('end', output_filenames))
     return
 
 def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
     global stream
     assert input_image is not None, 'No input image!'
 
-    yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
+    yield [None, None, None], None, '', '', gr.update(interactive=False), gr.update(interactive=True)
 
     stream = AsyncStream()
     async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf)
 
-    output_filenames = []
+    output_filenames = [None, None, None]
     while True:
         flag, data = stream.output_queue.next()
         if flag == 'file':
-            output_filenames.append(data)
-            # Show the latest video result (or show all as needed)
-            yield data, gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
+            # Find which slot is available and fill it
+            for i in range(3):
+                if output_filenames[i] is None:
+                    output_filenames[i] = data
+                    break
+            yield output_filenames, gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
         if flag == 'progress':
             preview, desc, html = data
-            yield gr.update(), gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
+            yield output_filenames, gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
         if flag == 'end':
-            # Optionally, if multiple videos, show the last one, or could combine for a gallery
-            if output_filenames:
-                last_fn = output_filenames[-1]
-            else:
-                last_fn = None
-            yield last_fn, gr.update(visible=False), gr.update(), '', gr.update(interactive=True), gr.update(interactive=False)
+            if isinstance(data, list):
+                # Final list of output filenames
+                output_filenames = data
+            yield output_filenames, gr.update(visible=False), gr.update(), '', gr.update(interactive=True), gr.update(interactive=False)
             break
 
 def end_process():
@@ -347,24 +348,27 @@ with block:
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
 
-                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
+                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)  # Not used
                 seed = gr.Number(label="Seed", value=31337, precision=0)
 
                 total_second_length = gr.Slider(label="Total Video Length (Seconds)", minimum=1, maximum=120, value=5, step=0.1)
-                latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)
+                latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)  # Should not change
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1, info='Changing this value is not recommended.')
 
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)  # Should not change
                 gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01, info='Changing this value is not recommended.')
-                rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
+                rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)  # Should not change
 
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger value causes slower speed.")
 
                 mp4_crf = gr.Slider(label="MP4 Compression", minimum=0, maximum=100, value=16, step=1, info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs. ")
 
         with gr.Column():
+            # Display 3 video outputs for seeds or 1 if only one
+            result_video1 = gr.Video(label="Video 1", autoplay=True, show_share_button=False, height=200, loop=True)
+            result_video2 = gr.Video(label="Video 2", autoplay=True, show_share_button=False, height=200, loop=True)
+            result_video3 = gr.Video(label="Video 3", autoplay=True, show_share_button=False, height=200, loop=True)
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling. If the starting action is not in the video, you just need to wait, and it will be generated later.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
@@ -372,7 +376,11 @@ with block:
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
-    start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
+    start_button.click(
+        fn=process,
+        inputs=ips,
+        outputs=[[result_video1, result_video2, result_video3], preview_image, progress_desc, progress_bar, start_button, end_button]
+    )
     end_button.click(fn=end_process)
 
 block.launch(
