@@ -310,7 +310,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 if output_filenames[i] is None:
                     output_filenames[i] = data
                     break
-            yield output_filenames, gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
+            yield output_filenames[0], output_filenames[1], output_filenames[2], gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
         if flag == 'progress':
             preview, desc, html = data
             yield output_filenames, gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
@@ -379,7 +379,7 @@ with block:
     start_button.click(
         fn=process,
         inputs=ips,
-        outputs=[[result_video1, result_video2, result_video3], preview_image, progress_desc, progress_bar, start_button, end_button]
+        outputs=[result_video1, result_video2, result_video3, preview_image, progress_desc, progress_bar, start_button, end_button]    
     )
     end_button.click(fn=end_process)
 
