@@ -9,16 +9,14 @@ import gradio as gr
 import torch
 import traceback
 import einops
-import safetensors.torch as sf
 import numpy as np
 import argparse
-import math
 
 from PIL import Image
 from diffusers import AutoencoderKLHunyuanVideo
 from transformers import LlamaModel, CLIPTextModel, LlamaTokenizerFast, CLIPTokenizer
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
-from diffusers_helper.utils import save_bcthw_as_mp4, crop_or_pad_yield_mask, soft_append_bcthw, resize_and_center_crop, state_dict_weighted_merge, state_dict_offset_merge, generate_timestamp
+from diffusers_helper.utils import save_bcthw_as_mp4, crop_or_pad_yield_mask, soft_append_bcthw, resize_and_center_crop, generate_timestamp
 from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from diffusers_helper.memory import cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, DynamicSwapInstaller, unload_complete_models, load_model_as_complete
@@ -108,7 +106,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     else:
         seeds = [int(seed)]
 
-    output_filenames = []
+    output_filenames = [None, None, None]
 
     for idx, run_seed in enumerate(seeds):
         try:
@@ -278,8 +276,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 output_filename = os.path.join(outputs_folder, f'{job_id}_seed{run_seed}_{total_generated_latent_frames}.mp4')
                 save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=mp4_crf)
                 print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
+                output_filenames[idx] = output_filename
                 stream.output_queue.push(('file', output_filename))
-                output_filenames.append(output_filename)
 
                 if is_last_section:
                     break
@@ -296,7 +294,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
     global stream
     assert input_image is not None, 'No input image!'
 
-    yield [None, None, None], None, '', '', gr.update(interactive=False), gr.update(interactive=True)
+    # All outputs: 3 videos, preview_image, progress_desc, progress_bar, start_button, end_button
+    yield None, None, None, None, "", "", gr.update(interactive=False), gr.update(interactive=True)
 
     stream = AsyncStream()
     async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf)
@@ -313,12 +312,11 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             yield output_filenames[0], output_filenames[1], output_filenames[2], gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
         if flag == 'progress':
             preview, desc, html = data
-            yield output_filenames, gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
+            yield output_filenames[0], output_filenames[1], output_filenames[2], gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
         if flag == 'end':
             if isinstance(data, list):
-                # Final list of output filenames
                 output_filenames = data
-            yield output_filenames, gr.update(visible=False), gr.update(), '', gr.update(interactive=True), gr.update(interactive=False)
+            yield output_filenames[0], output_filenames[1], output_filenames[2], gr.update(visible=False), gr.update(), '', gr.update(interactive=True), gr.update(interactive=False)
             break
 
 def end_process():
